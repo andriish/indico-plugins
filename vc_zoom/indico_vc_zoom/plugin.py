@@ -37,7 +37,7 @@ from indico.util.caching import memoize_request
 from indico.util.decorators import classproperty
 from indico.util.signals import make_interceptable
 from indico.util.user import principal_from_identifier
-from indico.web.forms.fields import IndicoEnumSelectField, IndicoPasswordField, TextListField
+from indico.web.forms.fields import IndicoEnumSelectField, IndicoPasswordField, PrincipalListField, TextListField
 from indico.web.forms.validators import HiddenUnless
 from indico.web.forms.widgets import SwitchWidget, TinyMCEWidget
 
@@ -111,8 +111,12 @@ class PluginSettingsForm(VCPluginSettingsFormBase):
         (_('Room Settings'), ['mute_audio', 'mute_host_video', 'mute_participant_video', 'join_before_host',
                               'waiting_room']),
         (_('Notifications'), ['creation_email_footer', 'send_host_url', 'notification_emails']),
-        (_('Access'), ['managers', 'acl'])
+        (_('Access'), ['managers', 'acl', 'host_acl'])
     ]
+
+    host_acl = PrincipalListField(_('Host ACL'), allow_groups=True,
+                                  description=_('Users and groups authorized to create Zoom meetings with someone '
+                                                'else as the host. If empty, everyone can do so.'))
 
     account_id = StringField(_('Account ID'))
     client_id = StringField(_('Client ID'))
@@ -244,6 +248,7 @@ class ZoomPlugin(VCPluginMixin, IndicoPlugin):
     """
 
     configurable = True
+    acl_settings = VCPluginMixin.acl_settings | {'host_acl'}
     settings_form = PluginSettingsForm
     vc_room_form = VCRoomForm
     vc_room_attach_form = VCRoomAttachForm
@@ -342,7 +347,10 @@ class ZoomPlugin(VCPluginMixin, IndicoPlugin):
                     # webinar hosts cannot be changed through the API
                     form.host_choice.render_kw = {'disabled': True}
                     form.host_user.render_kw = {'disabled': True}
-        elif not form.is_submitted():
+        if not self.can_set_other_host(session.user):
+            del form.host_choice
+            del form.host_user
+        if not existing_vc_room and not form.is_submitted():
             form.password.data = gen_random_passcode(self.settings.get('passcode_length'))
         return form
 
@@ -832,6 +840,16 @@ class ZoomPlugin(VCPluginMixin, IndicoPlugin):
 
         # return the new association
         return super().clone_room(old_event_vc_room, link_object)
+
+    def can_set_other_host(self, user):
+        """Check if a user may create meetings hosted by someone else."""
+        if not user:
+            return False
+        if self.can_manage_vc(user):
+            return True
+        if not self.settings.acls.get('host_acl'):  # everyone has access
+            return True
+        return self.settings.acls.contains_user('host_acl', user)
 
     def get_blueprints(self):
         return blueprint
