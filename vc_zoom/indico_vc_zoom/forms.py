@@ -297,7 +297,10 @@ class VCRoomForm(VCRoomFormBase):
     @generated_data
     def host(self):
         if self.host_choice is None:
-            return None
+            # the user may not pick a host: keep the current one or default to the user themselves
+            if self.vc_room is not None and self.vc_room.data.get('host'):
+                return self.vc_room.data['host']
+            return session.user.persistent_identifier
         elif self.host_choice.data == 'myself':
             return session.user.persistent_identifier
         else:
